@@ -1,0 +1,764 @@
+#!/bin/bash
+
+# Constants
+MAX_STUDENTS=20
+MAX_NAME_LENGTH=50
+MAX_PASSWORD_LENGTH=20
+DATA_FILE="student_data.txt"
+TEACHER_ID="teacher"
+TEACHER_PASSWORD="admin123"
+
+# Grade thresholds
+A_GRADE_THRESHOLD=90
+A_MINUS_GRADE_THRESHOLD=85
+B_PLUS_GRADE_THRESHOLD=80
+B_GRADE_THRESHOLD=75
+B_MINUS_GRADE_THRESHOLD=70
+C_PLUS_GRADE_THRESHOLD=65
+C_GRADE_THRESHOLD=60
+C_MINUS_GRADE_THRESHOLD=55
+D_GRADE_THRESHOLD=50
+PASS_CGPA=2.0
+
+# Global variables
+declare -a students_rollNo
+declare -a students_name
+declare -a students_password
+declare -a students_totalCourses
+declare -a students_cgpa
+declare -a students_isActive
+declare -a courses_name
+declare -a courses_marks
+declare -a courses_grade
+declare -a courses_gradePoints
+
+studentCount=0
+userType=0
+studentIndex=-1
+
+# Function to display the main menu
+displayMainMenu() {
+    clear
+    echo "===================================="
+    echo "    STUDENT MANAGEMENT SYSTEM       "
+    echo "===================================="
+    echo "1. Login"
+    echo "2. Exit"
+    echo "===================================="
+}
+
+# Function to display the teacher menu
+displayTeacherMenu() {
+    clear
+    echo "===================================="
+    echo "         TEACHER MENU               "
+    echo "===================================="
+    echo "1. Add Student"
+    echo "2. View Student Details"
+    echo "3. Update Student Information"
+    echo "4. Delete Student"
+    echo "5. Assign Marks"
+    echo "6. Generate Report (Ascending order by CGPA)"
+    echo "7. Generate Report (Descending order by CGPA)"
+    echo "8. List Passed Students"
+    echo "9. List Failed Students"
+    echo "10. Save Data"
+    echo "11. Logout"
+    echo "===================================="
+}
+
+# Function to display the student menu
+displayStudentMenu() {
+    clear
+    echo "===================================="
+    echo "         STUDENT MENU               "
+    echo "===================================="
+    echo "1. View Grades and CGPA"
+    echo "2. Logout"
+    echo "===================================="
+}
+
+# Function to authenticate user
+authenticateUser() {
+    local userId=$1
+    local password=$2
+    
+    # Check if teacher credentials
+    if [ "$userId" == "$TEACHER_ID" ] && [ "$password" == "$TEACHER_PASSWORD" ]; then
+        echo 1
+        return
+    fi
+    
+    # Check if student credentials
+    for ((i=0; i<studentCount; i++)); do
+        if [ "${students_rollNo[$i]}" == "$userId" ] && [ "${students_password[$i]}" == "$password" ] && [ "${students_isActive[$i]}" -eq 1 ]; then
+            echo 2
+            return
+        fi
+    done
+    
+    echo 0
+}
+
+# Function to calculate grade
+calculateGrade() {
+    local marks=$1
+    local -n grade=$2
+    local -n gradePoints=$3
+    
+    if (( $(echo "$marks >= $A_GRADE_THRESHOLD" | bc -l) )); then
+        grade="A"
+        gradePoints=4.0
+    elif (( $(echo "$marks >= $A_MINUS_GRADE_THRESHOLD" | bc -l) )); then
+        grade="A-"
+        gradePoints=3.7
+    elif (( $(echo "$marks >= $B_PLUS_GRADE_THRESHOLD" | bc -l) )); then
+        grade="B+"
+        gradePoints=3.3
+    elif (( $(echo "$marks >= $B_GRADE_THRESHOLD" | bc -l) )); then
+        grade="B"
+        gradePoints=3.0
+    elif (( $(echo "$marks >= $B_MINUS_GRADE_THRESHOLD" | bc -l) )); then
+        grade="B-"
+        gradePoints=2.7
+    elif (( $(echo "$marks >= $C_PLUS_GRADE_THRESHOLD" | bc -l) )); then
+        grade="C+"
+        gradePoints=2.3
+    elif (( $(echo "$marks >= $C_GRADE_THRESHOLD" | bc -l) )); then
+        grade="C"
+        gradePoints=2.0
+    elif (( $(echo "$marks >= $C_MINUS_GRADE_THRESHOLD" | bc -l) )); then
+        grade="C-"
+        gradePoints=1.7
+    elif (( $(echo "$marks >= $D_GRADE_THRESHOLD" | bc -l) )); then
+        grade="D"
+        gradePoints=1.0
+    else
+        grade="F"
+        gradePoints=0.0
+    fi
+}
+
+# Function to calculate CGPA
+calculateCGPA() {
+    local studentIdx=$1
+    local totalCourses=${students_totalCourses[$studentIdx]}
+    
+    if [ "$totalCourses" -eq 0 ]; then
+        echo "0.0"
+        return
+    fi
+    
+    local totalGradePoints=0.0
+    local startIdx=$((studentIdx * 5))  # Assuming max 5 courses per student
+    
+    for ((i=0; i<totalCourses; i++)); do
+        totalGradePoints=$(echo "$totalGradePoints + ${courses_gradePoints[$startIdx + $i]}" | bc -l)
+    done
+    
+    echo $(echo "scale=2; $totalGradePoints / $totalCourses" | bc -l)
+}
+
+# Function to add a new student
+addStudent() {
+    if [ "$studentCount" -ge "$MAX_STUDENTS" ]; then
+        read -p "Maximum student limit reached! Press Enter to continue..."
+        return
+    fi
+    
+    clear
+    echo "===================================="
+    echo "          ADD NEW STUDENT           "
+    echo "===================================="
+    
+    read -p "Enter Roll Number: " rollNo
+    
+    # Check if roll number already exists
+    for ((i=0; i<studentCount; i++)); do
+        if [ "${students_rollNo[$i]}" == "$rollNo" ] && [ "${students_isActive[$i]}" -eq 1 ]; then
+            read -p "Student with this Roll Number already exists! Press Enter to continue..."
+            return
+        fi
+    done
+    
+    read -p "Enter Name: " name
+    read -p "Enter Password: " password
+    read -p "Enter Number of Courses (max 5): " totalCourses
+    
+    if [ "$totalCourses" -gt 5 ]; then
+        totalCourses=5
+        echo "Maximum 5 courses allowed. Setting to 5."
+    fi
+    
+    # Add student to arrays
+    students_rollNo[$studentCount]=$rollNo
+    students_name[$studentCount]=$name
+    students_password[$studentCount]=$password
+    students_totalCourses[$studentCount]=$totalCourses
+    students_cgpa[$studentCount]=0.0
+    students_isActive[$studentCount]=1
+    
+    # Initialize courses
+    local courseStartIdx=$((studentCount * 5))  # Assuming max 5 courses per student
+    
+    for ((i=0; i<totalCourses; i++)); do
+        read -p "Enter Course $((i+1)) Name: " courseName
+        courses_name[$courseStartIdx + $i]=$courseName
+        courses_marks[$courseStartIdx + $i]=0.0
+        courses_grade[$courseStartIdx + $i]="NA"
+        courses_gradePoints[$courseStartIdx + $i]=0.0
+    done
+    
+    ((studentCount++))
+    
+    read -p "Student added successfully! Press Enter to continue..."
+    
+    # Save data to file
+    saveData
+}
+
+# Function to view student details
+viewStudentDetails() {
+    clear
+    echo "===================================="
+    echo "        VIEW STUDENT DETAILS        "
+    echo "===================================="
+    
+    read -p "Enter Student Roll Number: " rollNo
+    
+    local found=0
+    
+    for ((i=0; i<studentCount; i++)); do
+        if [ "${students_rollNo[$i]}" == "$rollNo" ] && [ "${students_isActive[$i]}" -eq 1 ]; then
+            found=1
+            
+            echo -e "\nRoll Number: ${students_rollNo[$i]}"
+            echo "Name: ${students_name[$i]}"
+            echo "CGPA: ${students_cgpa[$i]}"
+            echo "Courses: ${students_totalCourses[$i]}"
+            
+            echo -e "\n%-20s %-10s %-5s %-10s"
+            echo "----------------------------------------------------------"
+            
+            local courseStartIdx=$((i * 5))
+            
+            for ((j=0; j<${students_totalCourses[$i]}; j++)); do
+                printf "%-20s %-10.2f %-5s %-10.2f\n" \
+                    "${courses_name[$courseStartIdx + $j]}" \
+                    "${courses_marks[$courseStartIdx + $j]}" \
+                    "${courses_grade[$courseStartIdx + $j]}" \
+                    "${courses_gradePoints[$courseStartIdx + $j]}"
+            done
+            
+            break
+        fi
+    done
+    
+    if [ "$found" -eq 0 ]; then
+        read -p "Student not found! Press Enter to continue..."
+    else
+        read -p $'\nPress Enter to continue...'
+    fi
+}
+
+# Function to update student information
+updateStudentInfo() {
+    clear
+    echo "===================================="
+    echo "    UPDATE STUDENT INFORMATION      "
+    echo "===================================="
+    
+    read -p "Enter Student Roll Number: " rollNo
+    
+    local found=0
+    
+    for ((i=0; i<studentCount; i++)); do
+        if [ "${students_rollNo[$i]}" == "$rollNo" ] && [ "${students_isActive[$i]}" -eq 1 ]; then
+            found=1
+            
+            echo -e "\nStudent Found:"
+            echo "Roll Number: ${students_rollNo[$i]}"
+            echo "Name: ${students_name[$i]}"
+            echo -e "\nWhat would you like to update?"
+            echo "1. Name"
+            echo "2. Password"
+            echo "3. Course Marks"
+            read -p "Enter choice: " updateChoice
+            
+            case $updateChoice in
+                1) # Update name
+                    read -p "Enter new name: " newName
+                    students_name[$i]=$newName
+                    echo "Name updated successfully!"
+                    ;;
+                    
+                2) # Update password
+                    read -p "Enter new password: " newPassword
+                    students_password[$i]=$newPassword
+                    echo "Password updated successfully!"
+                    ;;
+                    
+                3) # Update course marks
+                    if [ "${students_totalCourses[$i]}" -gt 0 ]; then
+                        echo -e "\nSelect course to update marks:"
+                        
+                        local courseStartIdx=$((i * 5))
+                        
+                        for ((j=0; j<${students_totalCourses[$i]}; j++)); do
+                            echo "$((j+1)). ${courses_name[$courseStartIdx + $j]}"
+                        done
+                        
+                        read -p "Enter choice: " courseChoice
+                        
+                        if [ "$courseChoice" -ge 1 ] && [ "$courseChoice" -le "${students_totalCourses[$i]}" ]; then
+                            read -p "Enter new marks for ${courses_name[$courseStartIdx + $((courseChoice-1))]}: " newMarks
+                            
+                            if (( $(echo "$newMarks >= 0 && $newMarks <= 100" | bc -l) )); then
+                                courses_marks[$courseStartIdx + $((courseChoice-1))]=$newMarks
+                                
+                                # Recalculate grade and grade points
+                                calculateGrade "${courses_marks[$courseStartIdx + $((courseChoice-1))]}" \
+                                    courses_grade[$courseStartIdx + $((courseChoice-1))] \
+                                    courses_gradePoints[$courseStartIdx + $((courseChoice-1))]
+                                
+                                # Recalculate CGPA
+                                students_cgpa[$i]=$(calculateCGPA $i)
+                                
+                                echo "Marks updated successfully!"
+                            else
+                                echo "Invalid marks! Marks should be between 0 and 100."
+                            fi
+                        else
+                            echo "Invalid course selection!"
+                        fi
+                    else
+                        echo "No courses available to update!"
+                    fi
+                    ;;
+                    
+                *)
+                    echo "Invalid choice!"
+            esac
+            
+            break
+        fi
+    done
+    
+    if [ "$found" -eq 0 ]; then
+        read -p "Student not found! Press Enter to continue..."
+    else
+        read -p $'\nPress Enter to continue...'
+        
+        # Save data to file
+        saveData
+    fi
+}
+
+# Function to delete a student
+deleteStudent() {
+    clear
+    echo "===================================="
+    echo "          DELETE STUDENT            "
+    echo "===================================="
+    
+    read -p "Enter Student Roll Number to delete: " rollNo
+    
+    local found=0
+    
+    for ((i=0; i<studentCount; i++)); do
+        if [ "${students_rollNo[$i]}" == "$rollNo" ] && [ "${students_isActive[$i]}" -eq 1 ]; then
+            found=1
+            
+            echo -e "\nStudent Found:"
+            echo "Roll Number: ${students_rollNo[$i]}"
+            echo "Name: ${students_name[$i]}"
+            read -p $'\nAre you sure you want to delete this student? (Y/N): ' confirmation
+            
+            if [[ "${confirmation^^}" == "Y" ]]; then
+                students_isActive[$i]=0
+                echo "Student deleted successfully!"
+                
+                # Save data to file
+                saveData
+            else
+                echo "Deletion cancelled."
+            fi
+            
+            break
+        fi
+    done
+    
+    if [ "$found" -eq 0 ]; then
+        read -p "Student not found! Press Enter to continue..."
+    else
+        read -p $'\nPress Enter to continue...'
+    fi
+}
+
+# Function to assign marks to students
+assignMarks() {
+    clear
+    echo "===================================="
+    echo "            ASSIGN MARKS            "
+    echo "===================================="
+    
+    read -p "Enter Student Roll Number: " rollNo
+    
+    local found=0
+    
+    for ((i=0; i<studentCount; i++)); do
+        if [ "${students_rollNo[$i]}" == "$rollNo" ] && [ "${students_isActive[$i]}" -eq 1 ]; then
+            found=1
+            
+            echo -e "\nAssigning marks for ${students_name[$i]} (Roll No: ${students_rollNo[$i]})"
+            
+            local courseStartIdx=$((i * 5))
+            
+            for ((j=0; j<${students_totalCourses[$i]}; j++)); do
+                read -p "Enter marks for ${courses_name[$courseStartIdx + $j]} (0-100): " marks
+                
+                if (( $(echo "$marks >= 0 && $marks <= 100" | bc -l) )); then
+                    courses_marks[$courseStartIdx + $j]=$marks
+                    
+                    # Calculate grade and grade points
+                    calculateGrade "$marks" \
+                        courses_grade[$courseStartIdx + $j] \
+                        courses_gradePoints[$courseStartIdx + $j]
+                else
+                    echo "Invalid marks! Marks should be between 0 and 100. Setting to 0."
+                    courses_marks[$courseStartIdx + $j]=0
+                    courses_grade[$courseStartIdx + $j]="F"
+                    courses_gradePoints[$courseStartIdx + $j]=0.0
+                fi
+            done
+            
+            # Calculate CGPA
+            students_cgpa[$i]=$(calculateCGPA $i)
+            
+            echo -e "\nMarks assigned successfully! CGPA: ${students_cgpa[$i]}"
+            
+            # Save data to file
+            saveData
+            
+            break
+        fi
+    done
+    
+    if [ "$found" -eq 0 ]; then
+        read -p "Student not found! Press Enter to continue..."
+    else
+        read -p $'\nPress Enter to continue...'
+    fi
+}
+
+# Function to generate report
+generateReport() {
+    clear
+    echo "===================================="
+    echo "          STUDENT REPORT            "
+    echo "===================================="
+    
+    local sortOrder=$1
+    
+    # Count active students
+    local activeCount=0
+    for ((i=0; i<studentCount; i++)); do
+        if [ "${students_isActive[$i]}" -eq 1 ]; then
+            ((activeCount++))
+        fi
+    done
+    
+    if [ "$activeCount" -eq 0 ]; then
+        read -p "No students found! Press Enter to continue..."
+        return
+    fi
+    
+    # Create temporary arrays for sorting
+    local -a tempIndices
+    local index=0
+    
+    # Get indices of active students
+    for ((i=0; i<studentCount; i++)); do
+        if [ "${students_isActive[$i]}" -eq 1 ]; then
+            tempIndices[$index]=$i
+            ((index++))
+        fi
+    done
+    
+    # Sort by CGPA
+    for ((i=0; i<activeCount-1; i++)); do
+        for ((j=0; j<activeCount-i-1; j++)); do
+            local cgpa1=${students_cgpa[${tempIndices[$j]}]}
+            local cgpa2=${students_cgpa[${tempIndices[$j+1]}]}
+            
+            if { [ "$sortOrder" -eq 1 ] && (( $(echo "$cgpa1 > $cgpa2" | bc -l) )); } || \
+               { [ "$sortOrder" -eq 2 ] && (( $(echo "$cgpa1 < $cgpa2" | bc -l) )); }; then
+                # Swap indices
+                local temp=${tempIndices[$j]}
+                tempIndices[$j]=${tempIndices[$j+1]}
+                tempIndices[$j+1]=$temp
+            fi
+        done
+    done
+    
+    # Print report header
+    printf "%-10s %-20s %-10s %-15s\n" "Roll No" "Name" "CGPA" "Status"
+    echo "----------------------------------------------------"
+    
+    # Print sorted student data
+    for ((i=0; i<activeCount; i++)); do
+        local idx=${tempIndices[$i]}
+        local status="PASS"
+        
+        if (( $(echo "${students_cgpa[$idx]} < $PASS_CGPA" | bc -l) )); then
+            status="FAIL"
+        fi
+        
+        printf "%-10d %-20s %-10.2f %-15s\n" \
+            "${students_rollNo[$idx]}" \
+            "${students_name[$idx]}" \
+            "${students_cgpa[$idx]}" \
+            "$status"
+    done
+    
+    read -p $'\nPress Enter to continue...'
+}
+
+# Function to list passed students
+listPassedStudents() {
+    clear
+    echo "===================================="
+    echo "         PASSED STUDENTS            "
+    echo "===================================="
+    
+    # Count passed students
+    local passedCount=0
+    for ((i=0; i<studentCount; i++)); do
+        if [ "${students_isActive[$i]}" -eq 1 ] && (( $(echo "${students_cgpa[$i]} >= $PASS_CGPA" | bc -l) )); then
+            ((passedCount++))
+        fi
+    done
+    
+    if [ "$passedCount" -eq 0 ]; then
+        read -p "No passed students found! Press Enter to continue..."
+        return
+    fi
+    
+    # Print report header
+    printf "%-10s %-20s %-10s\n" "Roll No" "Name" "CGPA"
+    echo "----------------------------------------"
+    
+    # Print passed student data
+    for ((i=0; i<studentCount; i++)); do
+        if [ "${students_isActive[$i]}" -eq 1 ] && (( $(echo "${students_cgpa[$i]} >= $PASS_CGPA" | bc -l) )); then
+            printf "%-10d %-20s %-10.2f\n" \
+                "${students_rollNo[$i]}" \
+                "${students_name[$i]}" \
+                "${students_cgpa[$i]}"
+        fi
+    done
+    
+    read -p $'\nPress Enter to continue...'
+}
+
+# Function to list failed students
+listFailedStudents() {
+    clear
+    echo "===================================="
+    echo "         FAILED STUDENTS            "
+    echo "===================================="
+    
+    # Count failed students
+    local failedCount=0
+    for ((i=0; i<studentCount; i++)); do
+        if [ "${students_isActive[$i]}" -eq 1 ] && (( $(echo "${students_cgpa[$i]} < $PASS_CGPA" | bc -l) )); then
+            ((failedCount++))
+        fi
+    done
+    
+    if [ "$failedCount" -eq 0 ]; then
+        read -p "No failed students found! Press Enter to continue..."
+        return
+    fi
+    
+    # Print report header
+    printf "%-10s %-20s %-10s\n" "Roll No" "Name" "CGPA"
+    echo "----------------------------------------"
+    
+    # Print failed student data
+    for ((i=0; i<studentCount; i++)); do
+        if [ "${students_isActive[$i]}" -eq 1 ] && (( $(echo "${students_cgpa[$i]} < $PASS_CGPA" | bc -l) )); then
+            printf "%-10d %-20s %-10.2f\n" \
+                "${students_rollNo[$i]}" \
+                "${students_name[$i]}" \
+                "${students_cgpa[$i]}"
+        fi
+    done
+    
+    read -p $'\nPress Enter to continue...'
+}
+
+# Function to save data to file
+saveData() {
+    > "$DATA_FILE"  # Clear the file
+    
+    # Write the number of students first
+    echo "$studentCount" >> "$DATA_FILE"
+    
+    # Write each student's data
+    for ((i=0; i<studentCount; i++)); do
+        echo "${students_rollNo[$i]}" >> "$DATA_FILE"
+        echo "${students_name[$i]}" >> "$DATA_FILE"
+        echo "${students_password[$i]}" >> "$DATA_FILE"
+        echo "${students_totalCourses[$i]}" >> "$DATA_FILE"
+        echo "${students_cgpa[$i]}" >> "$DATA_FILE"
+        echo "${students_isActive[$i]}" >> "$DATA_FILE"
+        
+        # Write course data
+        local courseStartIdx=$((i * 5))
+        
+        for ((j=0; j<${students_totalCourses[$i]}; j++)); do
+            echo "${courses_name[$courseStartIdx + $j]}" >> "$DATA_FILE"
+            echo "${courses_marks[$courseStartIdx + $j]}" >> "$DATA_FILE"
+            echo "${courses_grade[$courseStartIdx + $j]}" >> "$DATA_FILE"
+            echo "${courses_gradePoints[$courseStartIdx + $j]}" >> "$DATA_FILE"
+        done
+    done
+}
+
+# Function to load data from file
+loadData() {
+    if [ ! -f "$DATA_FILE" ]; then
+        return
+    fi
+    
+    # Read the number of students
+    read -r studentCount < "$DATA_FILE"
+    
+    # Read each student's data
+    for ((i=0; i<studentCount; i++)); do
+        read -r students_rollNo[$i]
+        read -r students_name[$i]
+        read -r students_password[$i]
+        read -r students_totalCourses[$i]
+        read -r students_cgpa[$i]
+        read -r students_isActive[$i]
+        
+        # Read course data
+        local courseStartIdx=$((i * 5))
+        
+        for ((j=0; j<${students_totalCourses[$i]}; j++)); do
+            read -r courses_name[$courseStartIdx + $j]
+            read -r courses_marks[$courseStartIdx + $j]
+            read -r courses_grade[$courseStartIdx + $j]
+            read -r courses_gradePoints[$courseStartIdx + $j]
+        done
+    done < <(tail -n +2 "$DATA_FILE")  # Skip the first line (studentCount)
+}
+
+# Function for student to view their grades
+viewStudentGrades() {
+    local studentIdx=$1
+    
+    clear
+    echo "===================================="
+    echo "        YOUR GRADES AND CGPA        "
+    echo "===================================="
+    
+    echo "Name: ${students_name[$studentIdx]}"
+    echo "Roll Number: ${students_rollNo[$studentIdx]}"
+    echo "CGPA: ${students_cgpa[$studentIdx]}"
+    
+    echo -e "\n%-20s %-10s %-5s"
+    echo "---------------------------------------"
+    
+    local courseStartIdx=$((studentIdx * 5))
+    
+    for ((i=0; i<${students_totalCourses[$studentIdx]}; i++)); do
+        printf "%-20s %-10.2f %-5s\n" \
+            "${courses_name[$courseStartIdx + $i]}" \
+            "${courses_marks[$courseStartIdx + $i]}" \
+            "${courses_grade[$courseStartIdx + $i]}"
+    done
+    
+    read -p $'\nPress Enter to continue...'
+}
+
+# Main program loop
+while true; do
+    if [ "$userType" -eq 0 ]; then
+        displayMainMenu
+        read -p "Enter your choice: " choice
+        
+        case $choice in
+            1) # Login
+                clear
+                echo "===== LOGIN ====="
+                read -p "Enter User ID: " userId
+                read -p "Enter Password: "  password
+                echo
+                
+                userType=$(authenticateUser "$userId" "$password")
+                
+                if [ "$userType" -eq 0 ]; then
+                    read -p "Invalid credentials! Press Enter to continue..."
+                elif [ "$userType" -eq 2 ]; then
+                    # Find student index
+                    for ((i=0; i<studentCount; i++)); do
+                        if [ "${students_rollNo[$i]}" == "$userId" ] && [ "${students_isActive[$i]}" -eq 1 ]; then
+                            studentIndex=$i
+                            break
+                        fi
+                    done
+                fi
+                ;;
+                
+            2) # Exit
+                echo "Thank you for using Student Management System!"
+                exit 0
+                ;;
+                
+            *)
+                read -p "Invalid choice! Press Enter to continue..."
+        esac
+    elif [ "$userType" -eq 1 ]; then # Teacher menu
+        displayTeacherMenu
+        read -p "Enter your choice: " choice
+        
+        case $choice in
+            1) addStudent ;;
+            2) viewStudentDetails ;;
+            3) updateStudentInfo ;;
+            4) deleteStudent ;;
+            5) assignMarks ;;
+            6) generateReport 1 ;;  # Ascending
+            7) generateReport 2 ;;  # Descending
+            8) listPassedStudents ;;
+            9) listFailedStudents ;;
+            10) 
+                saveData
+                read -p "Data saved successfully! Press Enter to continue..."
+                ;;
+            11) 
+                userType=0
+                read -p "Logged out successfully! Press Enter to continue..."
+                ;;
+            *)
+                read -p "Invalid choice! Press Enter to continue..."
+        esac
+    elif [ "$userType" -eq 2 ] && [ "$studentIndex" -ne -1 ]; then # Student menu
+        displayStudentMenu
+        read -p "Enter your choice: " choice
+        
+        case $choice in
+            1) viewStudentGrades "$studentIndex" ;;
+            2) 
+                userType=0
+                studentIndex=-1
+                read -p "Logged out successfully! Press Enter to continue..."
+                ;;
+            *)
+                read -p "Invalid choice! Press Enter to continue..."
+        esac
+    fi
+done
