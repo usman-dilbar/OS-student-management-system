@@ -825,6 +825,9 @@ viewStudentGrades() {
     read -p $'\nPress Enter to continue...'
 }
 
+# Load data from file when program starts
+loadData
+
 # Main program loop
 while true; do
     if [ "$userType" -eq 0 ]; then
