@@ -309,7 +309,8 @@ viewStudentDetails() {
             echo "CGPA: ${students_cgpa[$i]}"
             echo "Courses: ${students_totalCourses[$i]}"
             
-            echo -e "\n%-20s %-10s %-5s %-10s"
+            # Fix: Add proper column headers with printf
+            printf "%-20s %-10s %-5s %-10s\n" "Course Name" "Marks" "Grade" "Grade Points"
             echo "----------------------------------------------------------"
             
             local courseStartIdx=$((i * 5))
