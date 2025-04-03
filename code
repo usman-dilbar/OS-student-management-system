@@ -1,9 +1,15 @@
 #!/bin/bash
 
+# Set safer bash options
+set -o errexit  # Exit on error
+set -o nounset  # Exit on undefined variables
+set -o pipefail # Exit on pipe failures
+
 # Constants
 MAX_STUDENTS=20
 MAX_NAME_LENGTH=50
 MAX_PASSWORD_LENGTH=20
+MIN_PASSWORD_LENGTH=4
 DATA_FILE="student_data.txt"
 TEACHER_ID="teacher"
 TEACHER_PASSWORD="admin123"
@@ -36,6 +42,123 @@ studentCount=0
 userType=0
 studentIndex=-1
 
+# Disable errexit for functions that need to return error codes
+trap_on() {
+    set -e
+}
+
+trap_off() {
+    set +e
+}
+
+# Validation function for roll number (allow alphanumeric)
+validateRollNumber() {
+    local rollNo=$1
+    local minLength=3
+    local maxLength=10
+    
+    # Check length
+    if [ ${#rollNo} -lt $minLength ] || [ ${#rollNo} -gt $maxLength ]; then
+        echo "Roll number must be between $minLength and $maxLength characters."
+        return 1
+    fi
+    
+    # Check if contains at least one alphanumeric character and no special characters
+    if ! [[ "$rollNo" =~ ^[a-zA-Z0-9]+$ ]]; then
+        echo "Roll number must contain only letters and numbers."
+        return 1
+    fi
+    
+    return 0
+}
+
+# Validation function for name (only letters and spaces)
+validateName() {
+    local name=$1
+    
+    # Check if empty
+    if [ -z "$name" ]; then
+        echo "Name cannot be empty."
+        return 1
+    fi
+    
+    # Check length
+    if [ ${#name} -gt $MAX_NAME_LENGTH ]; then
+        echo "Name must be less than $MAX_NAME_LENGTH characters."
+        return 1
+    fi
+    
+    # Check if contains only letters and spaces
+    if ! [[ "$name" =~ ^[a-zA-Z[:space:]]+$ ]]; then
+        echo "Name must contain only letters and spaces."
+        return 1
+    fi
+    
+    return 0
+}
+
+# Validation function for password
+validatePassword() {
+    local password=$1
+    
+    # Check length
+    if [ ${#password} -lt $MIN_PASSWORD_LENGTH ]; then
+        echo "Password must be at least $MIN_PASSWORD_LENGTH characters."
+        return 1
+    fi
+    
+    if [ ${#password} -gt $MAX_PASSWORD_LENGTH ]; then
+        echo "Password must be less than $MAX_PASSWORD_LENGTH characters."
+        return 1
+    fi
+    
+    return 0
+}
+
+# Validation function for number input
+validateNumber() {
+    local number=$1
+    local min=$2
+    local max=$3
+    
+    # Check if it's a number
+    if ! [[ "$number" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        echo "Input must be a number."
+        return 1
+    fi
+    
+    # Check range
+    if (( $(awk -v n="$number" -v min="$min" 'BEGIN {print (n < min)}') )) || 
+       (( $(awk -v n="$number" -v max="$max" 'BEGIN {print (n > max)}') )); then
+        echo "Number must be between $min and $max."
+        return 1
+    fi
+    
+    return 0
+}
+
+# Function to get valid input
+getValidInput() {
+    local prompt=$1
+    local validationFunction=$2
+    local input=""
+    local isValid=false
+    shift 2  # Remove first two parameters
+    
+    while [ "$isValid" = false ]; do
+        read -p "$prompt" input
+        
+        if $validationFunction "$input" "$@"; then
+            isValid=true
+        else
+            # The validation function already printed the error message
+            echo "Please try again."
+        fi
+    done
+    
+    echo "$input"
+}
+
 # Function to display the main menu
 displayMainMenu() {
     clear
@@ -43,7 +166,8 @@ displayMainMenu() {
     echo "    STUDENT MANAGEMENT SYSTEM       "
     echo "===================================="
     echo "1. Login"
-    echo "2. Exit"
+    echo "2. Load Data"
+    echo "3. Exit"
     echo "===================================="
 }
 
@@ -80,32 +204,47 @@ displayStudentMenu() {
 
 # Function to authenticate user
 authenticateUser() {
+    trap_off  # Disable errexit for this function
+    
     local userId=$1
     local password=$2
     
     # Check if teacher credentials
     if [ "$userId" == "$TEACHER_ID" ] && [ "$password" == "$TEACHER_PASSWORD" ]; then
         echo 1
-        return
+        trap_on
+        return 0
     fi
     
     # Check if student credentials
     for ((i=0; i<studentCount; i++)); do
         if [ "${students_rollNo[$i]}" == "$userId" ] && [ "${students_password[$i]}" == "$password" ] && [ "${students_isActive[$i]}" -eq 1 ]; then
             echo 2
-            return
+            trap_on
+            return 0
         fi
     done
     
     echo 0
+    trap_on
+    return 0
 }
 
 # Function to compare floating point numbers without using bc
 # Returns 1 if condition is true, 0 otherwise
 compare_floats() {
+    trap_off  # Disable errexit for this function
+    
     local op1=$1
     local operator=$2
     local op2=$3
+    
+    # Ensure inputs are numeric
+    if ! [[ "$op1" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || ! [[ "$op2" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]; then
+        echo 0
+        trap_on
+        return 1
+    fi
     
     # Convert to integers by multiplying by 100 to handle up to 2 decimal places
     # Use awk for more reliable float handling
@@ -135,20 +274,40 @@ compare_floats() {
             echo 0
             ;;
     esac
+    
+    trap_on
+    return 0
 }
 
 # Simple math function to replace basic bc operations
 simple_math() {
+    trap_off  # Disable errexit for this function
+    
     local expr="$1"
+    
+    # Ensure input contains only valid characters
+    if ! [[ "$expr" =~ ^[0-9\.+/-]+$ ]]; then
+        echo "0.00"
+        trap_on
+        return 1
+    fi
     
     # Handle division specifically - using awk for more reliable float handling
     if [[ "$expr" == *"/"* ]]; then
         local op1=$(echo "$expr" | cut -d'/' -f1)
         local op2=$(echo "$expr" | cut -d'/' -f2)
         
+        # Check for division by zero
+        if (( $(awk -v n="$op2" 'BEGIN {print (n == 0)}') )); then
+            echo "0.00"
+            trap_on
+            return 1
+        fi
+        
         # Division with 2 decimal places using awk
         awk -v n1="$op1" -v n2="$op2" 'BEGIN {printf "%.2f", n1/n2}'
-        return
+        trap_on
+        return 0
     fi
     
     # Handle addition - using awk for more reliable float handling
@@ -158,15 +317,20 @@ simple_math() {
         
         # Addition with 2 decimal places using awk
         awk -v n1="$op1" -v n2="$op2" 'BEGIN {printf "%.2f", n1+n2}'
-        return
+        trap_on
+        return 0
     fi
     
     # Just return the expression if no operations detected
     awk -v n="$expr" 'BEGIN {printf "%.2f", n}'
+    trap_on
+    return 0
 }
 
 # Function to calculate grade - modified to avoid name references
 calculateGrade() {
+    trap_off  # Disable errexit for this function
+    
     local marks=$1
     
     # Convert to numeric to ensure proper comparison
@@ -209,16 +373,29 @@ calculateGrade() {
     
     # Return both values as a colon-separated string
     echo "$grade:$gradePoints"
+    trap_on
+    return 0
 }
 
 # Function to calculate CGPA
 calculateCGPA() {
+    trap_off  # Disable errexit for this function
+    
     local studentIdx=$1
+    
+    # Validate student index
+    if [ "$studentIdx" -lt 0 ] || [ "$studentIdx" -ge "$studentCount" ]; then
+        echo "0.0"
+        trap_on
+        return 1
+    fi
+    
     local totalCourses=${students_totalCourses[$studentIdx]}
     
     if [ "$totalCourses" -eq 0 ]; then
         echo "0.0"
-        return
+        trap_on
+        return 0
     fi
     
     local totalGradePoints=0.0
@@ -229,13 +406,15 @@ calculateCGPA() {
     done
     
     echo $(simple_math "$totalGradePoints / $totalCourses")
+    trap_on
+    return 0
 }
 
 # Function to add a new student
 addStudent() {
     if [ "$studentCount" -ge "$MAX_STUDENTS" ]; then
         read -p "Maximum student limit reached! Press Enter to continue..."
-        return
+        return 1
     fi
     
     clear
@@ -243,24 +422,23 @@ addStudent() {
     echo "          ADD NEW STUDENT           "
     echo "===================================="
     
-    read -p "Enter Roll Number: " rollNo
+    # Get and validate roll number
+    local rollNo=$(getValidInput "Enter Roll Number: " validateRollNumber)
     
     # Check if roll number already exists
     for ((i=0; i<studentCount; i++)); do
         if [ "${students_rollNo[$i]}" == "$rollNo" ] && [ "${students_isActive[$i]}" -eq 1 ]; then
             read -p "Student with this Roll Number already exists! Press Enter to continue..."
-            return
+            return 1
         fi
     done
     
-    read -p "Enter Name: " name
-    read -p "Enter Password: " password
-    read -p "Enter Number of Courses (max 5): " totalCourses
+    # Get and validate name and password
+    local name=$(getValidInput "Enter Name: " validateName)
+    local password=$(getValidInput "Enter Password: " validatePassword)
     
-    if [ "$totalCourses" -gt 5 ]; then
-        totalCourses=5
-        echo "Maximum 5 courses allowed. Setting to 5."
-    fi
+    # Get number of courses (using new validateNumber function)
+    local totalCourses=$(getValidInput "Enter Number of Courses (max 5): " validateNumber 1 5)
     
     # Add student to arrays
     students_rollNo[$studentCount]=$rollNo
@@ -274,7 +452,19 @@ addStudent() {
     local courseStartIdx=$((studentCount * 5))  # Assuming max 5 courses per student
     
     for ((i=0; i<totalCourses; i++)); do
-        read -p "Enter Course $((i+1)) Name: " courseName
+        local courseName=""
+        local isValidCourse=false
+        
+        while [ "$isValidCourse" = false ]; do
+            read -p "Enter Course $((i+1)) Name: " courseName
+            
+            if [ -n "$courseName" ]; then
+                isValidCourse=true
+            else
+                echo "Course name cannot be empty. Please try again."
+            fi
+        done
+        
         courses_name[$courseStartIdx + $i]=$courseName
         courses_marks[$courseStartIdx + $i]=0.0
         courses_grade[$courseStartIdx + $i]="NA"
@@ -287,6 +477,7 @@ addStudent() {
     
     # Save data to file
     saveData
+    return 0
 }
 
 # Function to view student details
@@ -309,7 +500,8 @@ viewStudentDetails() {
             echo "CGPA: ${students_cgpa[$i]}"
             echo "Courses: ${students_totalCourses[$i]}"
             
-            echo -e "\n%-20s %-10s %-5s %-10s"
+            # Use printf for the table header
+            printf "\n%-20s %-10s %-5s %-10s\n" "Course Name" "Marks" "Grade" "Grade Points"
             echo "----------------------------------------------------------"
             
             local courseStartIdx=$((i * 5))
@@ -331,6 +523,8 @@ viewStudentDetails() {
     else
         read -p $'\nPress Enter to continue...'
     fi
+    
+    return 0
 }
 
 # Function to update student information
@@ -359,13 +553,13 @@ updateStudentInfo() {
             
             case $updateChoice in
                 1) # Update name
-                    read -p "Enter new name: " newName
+                    local newName=$(getValidInput "Enter new name: " validateName)
                     students_name[$i]=$newName
                     echo "Name updated successfully!"
                     ;;
                     
                 2) # Update password
-                    read -p "Enter new password: " newPassword
+                    local newPassword=$(getValidInput "Enter new password: " validatePassword)
                     students_password[$i]=$newPassword
                     echo "Password updated successfully!"
                     ;;
@@ -383,27 +577,24 @@ updateStudentInfo() {
                         read -p "Enter choice: " courseChoice
                         
                         if [ "$courseChoice" -ge 1 ] && [ "$courseChoice" -le "${students_totalCourses[$i]}" ]; then
-                            read -p "Enter new marks for ${courses_name[$courseStartIdx + $((courseChoice-1))]}: " newMarks
+                            # Get and validate marks (using new validateNumber function)
+                            local newMarks=$(getValidInput "Enter new marks for ${courses_name[$courseStartIdx + $((courseChoice-1))]}: " validateNumber 0 100)
                             
-                            if [ "$newMarks" -ge 0 ] && [ "$newMarks" -le 100 ]; then
-                                courses_marks[$courseStartIdx + $((courseChoice-1))]=$newMarks
-                                
-                                # Calculate grade and grade points with new function approach
-                                local grade_result=$(calculateGrade "$newMarks")
-                                local grade=$(echo "$grade_result" | cut -d':' -f1)
-                                local gradePoints=$(echo "$grade_result" | cut -d':' -f2)
-                                
-                                # Update the arrays
-                                courses_grade[$courseStartIdx + $((courseChoice-1))]="$grade"
-                                courses_gradePoints[$courseStartIdx + $((courseChoice-1))]="$gradePoints"
-                                
-                                # Recalculate CGPA
-                                students_cgpa[$i]=$(calculateCGPA $i)
-                                
-                                echo "Marks updated successfully!"
-                            else
-                                echo "Invalid marks! Marks should be between 0 and 100."
-                            fi
+                            courses_marks[$courseStartIdx + $((courseChoice-1))]=$newMarks
+                            
+                            # Calculate grade and grade points with new function approach
+                            local grade_result=$(calculateGrade "$newMarks")
+                            local grade=$(echo "$grade_result" | cut -d':' -f1)
+                            local gradePoints=$(echo "$grade_result" | cut -d':' -f2)
+                            
+                            # Update the arrays
+                            courses_grade[$courseStartIdx + $((courseChoice-1))]="$grade"
+                            courses_gradePoints[$courseStartIdx + $((courseChoice-1))]="$gradePoints"
+                            
+                            # Recalculate CGPA
+                            students_cgpa[$i]=$(calculateCGPA $i)
+                            
+                            echo "Marks updated successfully!"
                         else
                             echo "Invalid course selection!"
                         fi
@@ -428,6 +619,8 @@ updateStudentInfo() {
         # Save data to file
         saveData
     fi
+    
+    return 0
 }
 
 # Function to delete a student
@@ -469,9 +662,11 @@ deleteStudent() {
     else
         read -p $'\nPress Enter to continue...'
     fi
+    
+    return 0
 }
 
-# Function to assign marks to students - updated to work with new calculateGrade
+# Function to assign marks to students
 assignMarks() {
     clear
     echo "===================================="
@@ -491,26 +686,19 @@ assignMarks() {
             local courseStartIdx=$((i * 5))
             
             for ((j=0; j<${students_totalCourses[$i]}; j++)); do
-                read -p "Enter marks for ${courses_name[$courseStartIdx + $j]} (0-100): " marks
+                # Get and validate marks (using new validateNumber function)
+                local marks=$(getValidInput "Enter marks for ${courses_name[$courseStartIdx + $j]} (0-100): " validateNumber 0 100)
                 
-                # Validate marks between 0-100 using basic comparison
-                if [ "$marks" -ge 0 ] && [ "$marks" -le 100 ]; then
-                    courses_marks[$courseStartIdx + $j]=$marks
-                    
-                    # Calculate grade and grade points with new function approach
-                    local grade_result=$(calculateGrade "$marks")
-                    local grade=$(echo "$grade_result" | cut -d':' -f1)
-                    local gradePoints=$(echo "$grade_result" | cut -d':' -f2)
-                    
-                    # Update the arrays
-                    courses_grade[$courseStartIdx + $j]="$grade"
-                    courses_gradePoints[$courseStartIdx + $j]="$gradePoints"
-                else
-                    echo "Invalid marks! Marks should be between 0 and 100. Setting to 0."
-                    courses_marks[$courseStartIdx + $j]=0
-                    courses_grade[$courseStartIdx + $j]="F"
-                    courses_gradePoints[$courseStartIdx + $j]=0.0
-                fi
+                courses_marks[$courseStartIdx + $j]=$marks
+                
+                # Calculate grade and grade points with new function approach
+                local grade_result=$(calculateGrade "$marks")
+                local grade=$(echo "$grade_result" | cut -d':' -f1)
+                local gradePoints=$(echo "$grade_result" | cut -d':' -f2)
+                
+                # Update the arrays
+                courses_grade[$courseStartIdx + $j]="$grade"
+                courses_gradePoints[$courseStartIdx + $j]="$gradePoints"
             done
             
             # Calculate CGPA
@@ -530,9 +718,11 @@ assignMarks() {
     else
         read -p $'\nPress Enter to continue...'
     fi
+    
+    return 0
 }
 
-# Function to generate report - fix the printf formatting for roll numbers
+# Function to generate report
 generateReport() {
     clear
     echo "===================================="
@@ -551,7 +741,7 @@ generateReport() {
     
     if [ "$activeCount" -eq 0 ]; then
         read -p "No students found! Press Enter to continue..."
-        return
+        return 1
     fi
     
     # Create temporary arrays for sorting
@@ -595,7 +785,6 @@ generateReport() {
             status="FAIL"
         fi
         
-        # Changed from %-10d to %-10s for roll number
         printf "%-10s %-20s %-10.2f %-15s\n" \
             "${students_rollNo[$idx]}" \
             "${students_name[$idx]}" \
@@ -604,9 +793,10 @@ generateReport() {
     done
     
     read -p $'\nPress Enter to continue...'
+    return 0
 }
 
-# Function to list passed students - fix the printf formatting for roll numbers
+# Function to list passed students
 listPassedStudents() {
     clear
     echo "===================================="
@@ -623,7 +813,7 @@ listPassedStudents() {
     
     if [ "$passedCount" -eq 0 ]; then
         read -p "No passed students found! Press Enter to continue..."
-        return
+        return 1
     fi
     
     # Print report header
@@ -633,7 +823,6 @@ listPassedStudents() {
     # Print passed student data
     for ((i=0; i<studentCount; i++)); do
         if [ "${students_isActive[$i]}" -eq 1 ] && [ "$(compare_floats "${students_cgpa[$i]}" ">=" "$PASS_CGPA")" -eq 1 ]; then
-            # Changed from %-10d to %-10s for roll number
             printf "%-10s %-20s %-10.2f\n" \
                 "${students_rollNo[$i]}" \
                 "${students_name[$i]}" \
@@ -642,9 +831,10 @@ listPassedStudents() {
     done
     
     read -p $'\nPress Enter to continue...'
+    return 0
 }
 
-# Function to list failed students - fix the printf formatting for roll numbers
+# Function to list failed students
 listFailedStudents() {
     clear
     echo "===================================="
@@ -661,7 +851,7 @@ listFailedStudents() {
     
     if [ "$failedCount" -eq 0 ]; then
         read -p "No failed students found! Press Enter to continue..."
-        return
+        return 1
     fi
     
     # Print report header
@@ -671,7 +861,6 @@ listFailedStudents() {
     # Print failed student data
     for ((i=0; i<studentCount; i++)); do
         if [ "${students_isActive[$i]}" -eq 1 ] && [ "$(compare_floats "${students_cgpa[$i]}" "<" "$PASS_CGPA")" -eq 1 ]; then
-            # Changed from %-10d to %-10s for roll number
             printf "%-10s %-20s %-10.2f\n" \
                 "${students_rollNo[$i]}" \
                 "${students_name[$i]}" \
@@ -680,44 +869,84 @@ listFailedStudents() {
     done
     
     read -p $'\nPress Enter to continue...'
+    return 0
 }
 
 # Function to save data to file
 saveData() {
-    > "$DATA_FILE"  # Clear the file
-    
-    # Write header row
-    echo "# Student Management System Data File" >> "$DATA_FILE"
-    echo "# Format: studentCount=$studentCount" >> "$DATA_FILE"
-    echo "# STUDENT_DATA: rollNo|name|password|totalCourses|cgpa|isActive" >> "$DATA_FILE"
-    echo "# COURSE_DATA: courseName|marks|grade|gradePoints" >> "$DATA_FILE"
-    echo "#------------------------------------------------------------" >> "$DATA_FILE"
-    
-    # Write each student's data in tabular format
-    for ((i=0; i<studentCount; i++)); do
-        # Write student info with pipe delimiter
-        echo "STUDENT|${students_rollNo[$i]}|${students_name[$i]}|${students_password[$i]}|${students_totalCourses[$i]}|${students_cgpa[$i]}|${students_isActive[$i]}" >> "$DATA_FILE"
+    # Ensure we have write permissions before attempting to write
+    if [ ! -f "$DATA_FILE" ] || [ -w "$DATA_FILE" ]; then
+        # Create backup of existing file
+        if [ -f "$DATA_FILE" ]; then
+            cp "$DATA_FILE" "${DATA_FILE}.bak"
+        fi
         
-        # Write course data
-        local courseStartIdx=$((i * 5))
+        > "$DATA_FILE"  # Clear the file
         
-        for ((j=0; j<${students_totalCourses[$i]}; j++)); do
-            echo "COURSE|${courses_name[$courseStartIdx + $j]}|${courses_marks[$courseStartIdx + $j]}|${courses_grade[$courseStartIdx + $j]}|${courses_gradePoints[$courseStartIdx + $j]}" >> "$DATA_FILE"
+        # Write header row
+        echo "# Student Management System Data File" >> "$DATA_FILE"
+        echo "# Format: studentCount=$studentCount" >> "$DATA_FILE"
+        echo "# STUDENT_DATA: rollNo|name|password|totalCourses|cgpa|isActive" >> "$DATA_FILE"
+        echo "# COURSE_DATA: courseName|marks|grade|gradePoints" >> "$DATA_FILE"
+        echo "#------------------------------------------------------------" >> "$DATA_FILE"
+        
+        # Write each student's data in tabular format
+        for ((i=0; i<studentCount; i++)); do
+            # Write student info with pipe delimiter
+            echo "STUDENT|${students_rollNo[$i]}|${students_name[$i]}|${students_password[$i]}|${students_totalCourses[$i]}|${students_cgpa[$i]}|${students_isActive[$i]}" >> "$DATA_FILE"
+            
+            # Write course data
+            local courseStartIdx=$((i * 5))
+            
+            for ((j=0; j<${students_totalCourses[$i]}; j++)); do
+                echo "COURSE|${courses_name[$courseStartIdx + $j]}|${courses_marks[$courseStartIdx + $j]}|${courses_grade[$courseStartIdx + $j]}|${courses_gradePoints[$courseStartIdx + $j]}" >> "$DATA_FILE"
+            done
+            
+            # Add a separator between students
+            echo "#------------------------------------------------------------" >> "$DATA_FILE"
         done
         
-        # Add a separator between students
-        echo "#------------------------------------------------------------" >> "$DATA_FILE"
-    done
+        # Ensure data is written to disk
+        sync
+        
+        return 0
+    else
+        echo "Error: Cannot write to data file. Permission denied."
+        read -p "Press Enter to continue..."
+        return 1
+    fi
 }
 
-# Fix loadData function to properly handle course indices
+# Function to load data from file
 loadData() {
+    trap_off  # Disable errexit for this function
+    
     if [ ! -f "$DATA_FILE" ]; then
-        return
+        trap_on
+        return 1
+    fi
+    
+    if [ ! -r "$DATA_FILE" ]; then
+        echo "Error: Cannot read data file. Permission denied."
+        read -p "Press Enter to continue..."
+        trap_on
+        return 1
     fi
     
     # Initialize variables
     studentCount=0
+    
+    # Reset arrays
+    students_rollNo=()
+    students_name=()
+    students_password=()
+    students_totalCourses=()
+    students_cgpa=()
+    students_isActive=()
+    courses_name=()
+    courses_marks=()
+    courses_grade=()
+    courses_gradePoints=()
     
     # Legacy format detection flag
     local legacyFormat=false
@@ -795,11 +1024,21 @@ loadData() {
         # Update student count
         studentCount=$((currentStudent + 1))
     fi
+    
+    trap_on
+    return 0
 }
 
 # Function for student to view their grades
 viewStudentGrades() {
     local studentIdx=$1
+    
+    # Validate student index
+    if [ "$studentIdx" -lt 0 ] || [ "$studentIdx" -ge "$studentCount" ]; then
+        echo "Error: Invalid student index."
+        read -p "Press Enter to continue..."
+        return 1
+    fi
     
     clear
     echo "===================================="
@@ -810,7 +1049,8 @@ viewStudentGrades() {
     echo "Roll Number: ${students_rollNo[$studentIdx]}"
     echo "CGPA: ${students_cgpa[$studentIdx]}"
     
-    echo -e "\n%-20s %-10s %-5s"
+    # Fix: Use printf instead of echo for the table header
+    printf "\n%-20s %-10s %-5s\n" "Course Name" "Marks" "Grade"
     echo "---------------------------------------"
     
     local courseStartIdx=$((studentIdx * 5))
@@ -823,9 +1063,16 @@ viewStudentGrades() {
     done
     
     read -p $'\nPress Enter to continue...'
+    return 0
 }
 
 # Main program loop
+# Initialize - trap on by default
+trap_on
+
+# Call loadData() to load existing data when the program starts
+loadData
+
 while true; do
     if [ "$userType" -eq 0 ]; then
         displayMainMenu
@@ -853,8 +1100,13 @@ while true; do
                     done
                 fi
                 ;;
+            
+            2) # Load Data
+                loadData
+                read -p "Data loaded successfully! Press Enter to continue..."
+                ;;
                 
-            2) # Exit
+            3) # Exit
                 echo "Thank you for using Student Management System!"
                 exit 0
                 ;;
