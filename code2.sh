@@ -231,6 +231,84 @@ calculateCGPA() {
     echo $(simple_math "$totalGradePoints / $totalCourses")
 }
 
+# Function to validate that a string contains only letters, spaces and some punctuation (no numbers)
+validateNameOrCourse() {
+    local input=$1
+    local type=$2  # "name" or "course"
+    
+    # Check if input is empty
+    if [ -z "$input" ]; then
+        echo "$type cannot be empty!"
+        return 1
+    fi
+    
+    # Check if input contains digits
+    if [[ "$input" =~ [0-9] ]]; then
+        echo "$type should not contain numbers!"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Function to validate marks
+validateMarks() {
+    local marks=$1
+    
+    # Check if input is empty
+    if [ -z "$marks" ]; then
+        echo "Marks cannot be empty!"
+        return 1
+    fi
+    
+    # Check if input contains non-numeric characters
+    if ! [[ "$marks" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        echo "Marks should contain only numbers!"
+        return 1
+    fi
+    
+    # Check if marks are negative
+    if [ "$(compare_floats "$marks" "<" "0")" -eq 1 ]; then
+        echo "Marks cannot be negative!"
+        return 1
+    fi
+    
+    # Check if marks are greater than 100
+    if [ "$(compare_floats "$marks" ">" "100")" -eq 1 ]; then
+        echo "Marks cannot be greater than 100!"
+        return 1
+    fi
+    
+    return 0
+}
+
+# Function to validate roll number
+validateRollNo() {
+    local rollNo=$1
+    
+    # Check if roll number is empty
+    if [ -z "$rollNo" ]; then
+        echo "Roll number cannot be empty!"
+        return 1
+    fi
+    
+    # Check if roll number starts with a hyphen
+    if [[ "$rollNo" = -* ]]; then
+        echo "Roll number cannot start with a hyphen (-)!"
+        return 1
+    fi
+    
+    # Check if roll number already exists (uniqueness check)
+    for ((i=0; i<studentCount; i++)); do
+        if [ "${students_rollNo[$i]}" == "$rollNo" ] && [ "${students_isActive[$i]}" -eq 1 ]; then
+            echo "Student with this Roll Number already exists!"
+            return 1
+        fi
+    done
+    
+    return 0
+}
+
 # Function to add a new student
 addStudent() {
     if [ "$studentCount" -ge "$MAX_STUDENTS" ]; then
@@ -243,24 +321,55 @@ addStudent() {
     echo "          ADD NEW STUDENT           "
     echo "===================================="
     
-    read -p "Enter Roll Number: " rollNo
-    
-    # Check if roll number already exists
-    for ((i=0; i<studentCount; i++)); do
-        if [ "${students_rollNo[$i]}" == "$rollNo" ] && [ "${students_isActive[$i]}" -eq 1 ]; then
-            read -p "Student with this Roll Number already exists! Press Enter to continue..."
-            return
+    # Roll number input with validation
+    while true; do
+        read -p "Enter Roll Number: " rollNo
+        
+        # Validate roll number
+        validateRollNo "$rollNo"
+        if [ $? -eq 0 ]; then
+            break
+        else
+            read -p "$(validateRollNo "$rollNo") Press Enter to try again..."
         fi
     done
     
-    read -p "Enter Name: " name
-    read -p "Enter Password: " password
-    read -p "Enter Number of Courses (max 5): " totalCourses
+    # Name input with validation
+    while true; do
+        read -p "Enter Name: " name
+        
+        # Validate name
+        validateNameOrCourse "$name" "Name"
+        if [ $? -eq 0 ]; then
+            break
+        else
+            read -p "$(validateNameOrCourse "$name" "Name") Press Enter to try again..."
+        fi
+    done
     
-    if [ "$totalCourses" -gt 5 ]; then
-        totalCourses=5
-        echo "Maximum 5 courses allowed. Setting to 5."
-    fi
+    # Password input
+    read -p "Enter Password: " password
+    
+    # Number of courses input with validation
+    while true; do
+        read -p "Enter Number of Courses (max 5): " totalCourses
+        
+        if ! [[ "$totalCourses" =~ ^[0-9]+$ ]]; then
+            read -p "Please enter a valid number! Press Enter to try again..."
+            continue
+        fi
+        
+        if [ "$totalCourses" -le 0 ]; then
+            read -p "Number of courses must be at least 1! Press Enter to try again..."
+            continue
+        fi
+        
+        if [ "$totalCourses" -gt 5 ]; then
+            totalCourses=5
+            echo "Maximum 5 courses allowed. Setting to 5."
+        fi
+        break
+    done
     
     # Add student to arrays
     students_rollNo[$studentCount]=$rollNo
@@ -274,7 +383,19 @@ addStudent() {
     local courseStartIdx=$((studentCount * 5))  # Assuming max 5 courses per student
     
     for ((i=0; i<totalCourses; i++)); do
-        read -p "Enter Course $((i+1)) Name: " courseName
+        # Course name input with validation
+        while true; do
+            read -p "Enter Course $((i+1)) Name: " courseName
+            
+            # Validate course name
+            validateNameOrCourse "$courseName" "Course name"
+            if [ $? -eq 0 ]; then
+                break
+            else
+                read -p "$(validateNameOrCourse "$courseName" "Course name") Press Enter to try again..."
+            fi
+        done
+        
         courses_name[$courseStartIdx + $i]=$courseName
         courses_marks[$courseStartIdx + $i]=0.0
         courses_grade[$courseStartIdx + $i]="NA"
@@ -360,9 +481,19 @@ updateStudentInfo() {
             
             case $updateChoice in
                 1) # Update name
-                    read -p "Enter new name: " newName
-                    students_name[$i]=$newName
-                    echo "Name updated successfully!"
+                    while true; do
+                        read -p "Enter new name: " newName
+                        
+                        # Validate name
+                        validateNameOrCourse "$newName" "Name"
+                        if [ $? -eq 0 ]; then
+                            students_name[$i]=$newName
+                            echo "Name updated successfully!"
+                            break
+                        else
+                            read -p "$(validateNameOrCourse "$newName" "Name") Press Enter to try again..."
+                        fi
+                    done
                     ;;
                     
                 2) # Update password
@@ -384,27 +515,32 @@ updateStudentInfo() {
                         read -p "Enter choice: " courseChoice
                         
                         if [ "$courseChoice" -ge 1 ] && [ "$courseChoice" -le "${students_totalCourses[$i]}" ]; then
-                            read -p "Enter new marks for ${courses_name[$courseStartIdx + $((courseChoice-1))]}: " newMarks
-                            
-                            if [ "$newMarks" -ge 0 ] && [ "$newMarks" -le 100 ]; then
-                                courses_marks[$courseStartIdx + $((courseChoice-1))]=$newMarks
+                            while true; do
+                                read -p "Enter new marks for ${courses_name[$courseStartIdx + $((courseChoice-1))]}: " newMarks
                                 
-                                # Calculate grade and grade points with new function approach
-                                local grade_result=$(calculateGrade "$newMarks")
-                                local grade=$(echo "$grade_result" | cut -d':' -f1)
-                                local gradePoints=$(echo "$grade_result" | cut -d':' -f2)
-                                
-                                # Update the arrays
-                                courses_grade[$courseStartIdx + $((courseChoice-1))]="$grade"
-                                courses_gradePoints[$courseStartIdx + $((courseChoice-1))]="$gradePoints"
-                                
-                                # Recalculate CGPA
-                                students_cgpa[$i]=$(calculateCGPA $i)
-                                
-                                echo "Marks updated successfully!"
-                            else
-                                echo "Invalid marks! Marks should be between 0 and 100."
-                            fi
+                                # Validate marks
+                                validateMarks "$newMarks"
+                                if [ $? -eq 0 ]; then
+                                    courses_marks[$courseStartIdx + $((courseChoice-1))]=$newMarks
+                                    
+                                    # Calculate grade and grade points with new function approach
+                                    local grade_result=$(calculateGrade "$newMarks")
+                                    local grade=$(echo "$grade_result" | cut -d':' -f1)
+                                    local gradePoints=$(echo "$grade_result" | cut -d':' -f2)
+                                    
+                                    # Update the arrays
+                                    courses_grade[$courseStartIdx + $((courseChoice-1))]="$grade"
+                                    courses_gradePoints[$courseStartIdx + $((courseChoice-1))]="$gradePoints"
+                                    
+                                    # Recalculate CGPA
+                                    students_cgpa[$i]=$(calculateCGPA $i)
+                                    
+                                    echo "Marks updated successfully!"
+                                    break
+                                else
+                                    read -p "$(validateMarks "$newMarks") Press Enter to try again..."
+                                fi
+                            done
                         else
                             echo "Invalid course selection!"
                         fi
@@ -492,26 +628,27 @@ assignMarks() {
             local courseStartIdx=$((i * 5))
             
             for ((j=0; j<${students_totalCourses[$i]}; j++)); do
-                read -p "Enter marks for ${courses_name[$courseStartIdx + $j]} (0-100): " marks
-                
-                # Validate marks between 0-100 using basic comparison
-                if [ "$marks" -ge 0 ] && [ "$marks" -le 100 ]; then
-                    courses_marks[$courseStartIdx + $j]=$marks
+                while true; do
+                    read -p "Enter marks for ${courses_name[$courseStartIdx + $j]} (0-100): " marks
                     
-                    # Calculate grade and grade points with new function approach
-                    local grade_result=$(calculateGrade "$marks")
-                    local grade=$(echo "$grade_result" | cut -d':' -f1)
-                    local gradePoints=$(echo "$grade_result" | cut -d':' -f2)
-                    
-                    # Update the arrays
-                    courses_grade[$courseStartIdx + $j]="$grade"
-                    courses_gradePoints[$courseStartIdx + $j]="$gradePoints"
-                else
-                    echo "Invalid marks! Marks should be between 0 and 100. Setting to 0."
-                    courses_marks[$courseStartIdx + $j]=0
-                    courses_grade[$courseStartIdx + $j]="F"
-                    courses_gradePoints[$courseStartIdx + $j]=0.0
-                fi
+                    # Validate marks
+                    validateMarks "$marks"
+                    if [ $? -eq 0 ]; then
+                        courses_marks[$courseStartIdx + $j]=$marks
+                        
+                        # Calculate grade and grade points with new function approach
+                        local grade_result=$(calculateGrade "$marks")
+                        local grade=$(echo "$grade_result" | cut -d':' -f1)
+                        local gradePoints=$(echo "$grade_result" | cut -d':' -f2)
+                        
+                        # Update the arrays
+                        courses_grade[$courseStartIdx + $j]="$grade"
+                        courses_gradePoints[$courseStartIdx + $j]="$gradePoints"
+                        break
+                    else
+                        read -p "$(validateMarks "$marks") Press Enter to try again..."
+                    fi
+                done
             done
             
             # Calculate CGPA
@@ -873,7 +1010,7 @@ while true; do
         case $choice in
             1) addStudent ;;
             2) viewStudentDetails ;;
-            3) updateStudentInfo ;;
+             3) updateStudentInfo ;;
             4) deleteStudent ;;
             5) assignMarks ;;
             6) generateReport 1 ;;  # Ascending
